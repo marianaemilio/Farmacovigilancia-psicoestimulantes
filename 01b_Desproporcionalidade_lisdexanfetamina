@@ -1,0 +1,282 @@
+# ===============================
+# 1. IMPORTAÇÃO DAS BIBLIOTECAS
+# ===============================
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import warnings
+from datetime import datetime
+
+
+# ===============================
+# 2. CARREGAR A PLANILHA
+# ===============================
+
+planilha_desproporcionalidade_02032026 = pd.read_csv(
+    "planilha_desproporcionalidade_02032026.csv",
+    low_memory=False
+)
+
+planilha_desproporcionalidade_02032026.shape
+
+
+# ===============================
+# 3. PADRONIZAÇÃO DE TEXTO (minúsculas)
+# ===============================
+
+planilha_desproporcionalidade_02032026["PT"] = (
+    planilha_desproporcionalidade_02032026["PT"].str.lower()
+)
+
+planilha_desproporcionalidade_02032026["PRINCIPIOS_ATIVOS_WHODRUG"] = (
+    planilha_desproporcionalidade_02032026["PRINCIPIOS_ATIVOS_WHODRUG"]
+    .astype(str)
+    .str.lower()
+)
+
+
+# ===============================
+# 4. PADRONIZAÇÃO DOS NOMES – METILFENIDATO
+# (AFETA TUDO, MAS AINDA NÃO FILTRA)
+# ===============================
+
+padrao_lisdexanfetamina = (
+    "lisdexanfetamina|"
+    "lisdexanfetamine|"
+    "lisdexanfetamine mesilate|"
+    "mesilato de lisdexanfetamina"
+)
+
+planilha_desproporcionalidade_02032026["PRINCIPIOS_ATIVOS_WHODRUG"] = (
+    planilha_desproporcionalidade_02032026["PRINCIPIOS_ATIVOS_WHODRUG"]
+    .str.replace(padrao_lisdexanfetamina, "lisdexanfetamina", regex=True)
+)
+
+
+# ===============================
+# 5. CONTAGEM EXPLORATÓRIA
+# (INCLUI CASOS COMBINADOS)
+# ===============================
+
+P = "lisdexanfetamina"
+
+linhas_com_P = planilha_desproporcionalidade_02032026[
+    planilha_desproporcionalidade_02032026["PRINCIPIOS_ATIVOS_WHODRUG"]
+    .str.contains(P, na=False)
+]
+
+linhas_com_outros = linhas_com_P[
+    linhas_com_P["PRINCIPIOS_ATIVOS_WHODRUG"].str.count(r"\|") > 0
+]
+
+print(f"Total de linhas com '{P}': {len(linhas_com_P)}")
+print(f"Total de linhas com '{P}' + outro(s) medicamento(s): {len(linhas_com_outros)}")
+
+
+# ===============================
+# 6. LISTA DE EVENTOS ADVERSOS
+# ===============================
+
+eventos_adversos = (
+    planilha_desproporcionalidade_02032026["PT"]
+    .dropna()
+    .unique()
+)
+
+
+# ===============================
+# 7. FILTRAGEM PARA ANÁLISE
+# ===============================
+
+casos_com_P = planilha_desproporcionalidade_02032026[
+    planilha_desproporcionalidade_02032026["PRINCIPIOS_ATIVOS_WHODRUG"] == P
+]
+
+casos_sem_P = planilha_desproporcionalidade_02032026[
+    planilha_desproporcionalidade_02032026["PRINCIPIOS_ATIVOS_WHODRUG"] != P
+]
+
+
+# ===============================
+# 8. CONTAGENS GERAIS
+# ===============================
+
+total_casos_com_P = len(casos_com_P)
+total_casos_sem_P = len(casos_sem_P)
+
+contagem_com_P = casos_com_P["PT"].value_counts().to_dict()
+contagem_sem_P = casos_sem_P["PT"].value_counts().to_dict()
+
+
+# ===============================
+# 9. CONSTRUÇÃO DA TABELA A, B, C, D
+# ===============================
+
+df_resultados_desproporcionalidade = pd.DataFrame(
+    eventos_adversos,
+    columns=["Evento Adverso"]
+)
+
+df_resultados_desproporcionalidade["A"] = (
+    df_resultados_desproporcionalidade["Evento Adverso"]
+    .map(contagem_com_P)
+    .fillna(0)
+    .astype(int)
+)
+
+df_resultados_desproporcionalidade["C"] = (
+    df_resultados_desproporcionalidade["Evento Adverso"]
+    .map(contagem_sem_P)
+    .fillna(0)
+    .astype(int)
+)
+
+df_resultados_desproporcionalidade["B"] = (
+    total_casos_com_P - df_resultados_desproporcionalidade["A"]
+)
+
+df_resultados_desproporcionalidade["D"] = (
+    total_casos_sem_P - df_resultados_desproporcionalidade["C"]
+)
+
+
+# ===============================
+# 10. CÁLCULO DO ROR + IC 95%
+# ===============================
+
+with np.errstate(divide="ignore", invalid="ignore"):
+
+    df_resultados_desproporcionalidade["ROR"] = (
+        (df_resultados_desproporcionalidade["A"] /
+         df_resultados_desproporcionalidade["B"]) /
+        (df_resultados_desproporcionalidade["C"] /
+         df_resultados_desproporcionalidade["D"])
+    )
+
+    s_ror = np.sqrt(
+        (1 / df_resultados_desproporcionalidade["A"]) +
+        (1 / df_resultados_desproporcionalidade["B"]) +
+        (1 / df_resultados_desproporcionalidade["C"]) +
+        (1 / df_resultados_desproporcionalidade["D"])
+    )
+
+    fator_exp_ror = np.exp(1.96 * s_ror)
+
+    df_resultados_desproporcionalidade["IC_Lower"] = (
+        df_resultados_desproporcionalidade["ROR"] / fator_exp_ror
+    )
+
+    df_resultados_desproporcionalidade["IC_Upper"] = (
+        df_resultados_desproporcionalidade["ROR"] * fator_exp_ror
+    )
+
+
+# ===============================
+# 11. CÁLCULO DO PRR + IC 95%
+# ===============================
+
+with np.errstate(divide="ignore", invalid="ignore"):
+
+    df_resultados_desproporcionalidade["PRR"] = (
+        (df_resultados_desproporcionalidade["A"] /
+         (df_resultados_desproporcionalidade["A"] +
+          df_resultados_desproporcionalidade["B"])) /
+        (df_resultados_desproporcionalidade["C"] /
+         (df_resultados_desproporcionalidade["C"] +
+          df_resultados_desproporcionalidade["D"]))
+    )
+
+    s_prr = np.sqrt(
+        (1 / df_resultados_desproporcionalidade["A"]) +
+        (1 / df_resultados_desproporcionalidade["C"]) -
+        (1 / (df_resultados_desproporcionalidade["A"] +
+              df_resultados_desproporcionalidade["B"])) -
+        (1 / (df_resultados_desproporcionalidade["C"] +
+              df_resultados_desproporcionalidade["D"]))
+    )
+
+    fator_exp_prr = np.exp(1.96 * s_prr)
+
+    df_resultados_desproporcionalidade["PRR_IC_Lower"] = (
+        df_resultados_desproporcionalidade["PRR"] / fator_exp_prr
+    )
+
+    df_resultados_desproporcionalidade["PRR_IC_Upper"] = (
+        df_resultados_desproporcionalidade["PRR"] * fator_exp_prr
+    )
+
+
+# ===============================
+# 12. CRITÉRIOS DE SINAL
+# ===============================
+
+df_resultados_desproporcionalidade["Sinal_ROR"] = (
+    (df_resultados_desproporcionalidade["IC_Lower"] > 1) &
+    (df_resultados_desproporcionalidade["A"] >= 3)
+)
+
+df_resultados_desproporcionalidade["Sinal_PRR"] = (
+    (df_resultados_desproporcionalidade["PRR_IC_Lower"] >= 1) &
+    (df_resultados_desproporcionalidade["A"] >= 3)
+)
+
+
+# ===============================
+# 13. MAPEAMENTO MEDDRA
+# ===============================
+
+map_hlt = (
+    planilha_desproporcionalidade_02032026
+    .drop_duplicates(subset=["PT"])
+    .set_index("PT")["HLT"]
+    .to_dict()
+)
+
+map_hlgt = (
+    planilha_desproporcionalidade_02032026
+    .drop_duplicates(subset=["PT"])
+    .set_index("PT")["HLGT"]
+    .to_dict()
+)
+
+map_soc = (
+    planilha_desproporcionalidade_02032026
+    .drop_duplicates(subset=["PT"])
+    .set_index("PT")["SOC"]
+    .to_dict()
+)
+
+df_resultados_desproporcionalidade["HLT"] = (
+    df_resultados_desproporcionalidade["Evento Adverso"].map(map_hlt)
+)
+
+df_resultados_desproporcionalidade["HLGT"] = (
+    df_resultados_desproporcionalidade["Evento Adverso"].map(map_hlgt)
+)
+
+df_resultados_desproporcionalidade["SOC"] = (
+    df_resultados_desproporcionalidade["Evento Adverso"].map(map_soc)
+)
+
+
+# ===============================
+# 14. ORGANIZAÇÃO FINAL
+# ===============================
+
+df_resultados_desproporcionalidade = (
+    df_resultados_desproporcionalidade
+    .sort_values(by="A", ascending=False)
+)
+
+
+# ===============================
+# 15. EXPORTAÇÃO
+# ===============================
+
+df_resultados_desproporcionalidade.to_excel(
+    "df_resultados_desproporcionalidade_lisdexanfetamina_monoterapia.xlsx",
+    index=False
+)
+
+print("Arquivo exportado com sucesso!")
